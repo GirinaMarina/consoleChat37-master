@@ -1,21 +1,18 @@
 package server;
 
 
-import com.mysql.cj.jdbc.Driver;
 import org.json.simple.JSONArray;
 import org.json.simple.JSONObject;
 import org.json.simple.parser.JSONParser;
+import org.json.simple.parser.ParseException;
 
+import java.io.DataInputStream;
+import java.io.DataOutputStream;
 import java.io.IOException;
-import java.lang.reflect.Constructor;
 import java.net.ServerSocket;
 import java.net.Socket;
-import java.sql.Connection;
-import java.sql.DriverManager;
-import java.sql.ResultSet;
-import java.sql.Statement;
+import java.sql.*;
 import java.util.ArrayList;
-import java.util.Objects;
 
 public class Server {
     static String db_url = "jdbc:mysql://127.0.0.1:3306/chat37";
@@ -24,18 +21,17 @@ public class Server {
     static Connection connection;
 
     public static void main(String[] args) {
-        ArrayList<Socket> sockets = new ArrayList<>();
         ArrayList<User> users = new ArrayList<>();
         // 0.0.0.0 - 255.255.255.255 NAT
         try {
             ServerSocket serverSocket = new ServerSocket(9123);
             System.out.println("Сервер запущен");
-            Class.forName("com.mysql.cj.jdbc.Driver").newInstance();
+            Class.forName("com.mysql.cj.jdbc.Driver").getDeclaredConstructor().newInstance();
             while (true) {
                 Socket socket = serverSocket.accept();
                 System.out.println("Клиент подключился");
                 User user = new User(socket);
-                users.add(user);
+
                 Thread thread = new Thread(new Runnable() {
                     @Override
                     public void run() {
@@ -48,112 +44,69 @@ public class Server {
                                 user.getOut().writeUTF(jsonObject.toJSONString());
                                 jsonObject = (JSONObject) jsonParser.parse(user.getIn().readUTF());
                                 String command = jsonObject.get("msg").toString();
-                                connection = DriverManager.getConnection(db_url, db_login, db_pass);
-                                Statement statement = connection.createStatement();
                                 if (command.equals("/reg")) {
-                                    jsonObject.put("msg", "Введите имя: ");
-                                    user.getOut().writeUTF(jsonObject.toJSONString());
-                                    jsonObject = (JSONObject) jsonParser.parse(user.getIn().readUTF());
-                                    String name = jsonObject.get("msg").toString();
-                                    jsonObject.put("msg", "Введите login: ");
-                                    user.getOut().writeUTF(jsonObject.toJSONString());
-                                    jsonObject = (JSONObject) jsonParser.parse(user.getIn().readUTF());
-                                    String login = jsonObject.get("msg").toString();
-                                    jsonObject.put("msg", "Введите password: ");
-                                    user.getOut().writeUTF(jsonObject.toJSONString());
-                                    jsonObject = (JSONObject) jsonParser.parse(user.getIn().readUTF());
-                                    String pass = jsonObject.get("msg").toString();
-                                    statement.executeUpdate("INSERT INTO `users` (`name`, `login`, `pass`) VALUES ('"+name+"', '"+login+"', '"+pass+"')");
-                                    statement.close();
-                                    break;
+                                    if (user.reg(db_url, db_login, db_pass)) break;
                                 } else if (command.equals("/login")) {
-                                    boolean isTruePasswordAndLogin = false;
-                                    while (!isTruePasswordAndLogin) {
-                                        jsonObject.put("msg", "Введите login: ");
-                                        user.getOut().writeUTF(jsonObject.toJSONString());
-                                        jsonObject = (JSONObject) jsonParser.parse(user.getIn().readUTF());
-                                        String login = jsonObject.get("msg").toString();
-                                        jsonObject.put("msg", "Введите пароль: ");
-                                        user.getOut().writeUTF(jsonObject.toJSONString());
-                                        jsonObject = (JSONObject) jsonParser.parse(user.getIn().readUTF());
-                                        String pass = jsonObject.get("msg").toString();
-                                        if(login != null || pass != null) {
-                                            ResultSet resultSet =
-                                                    statement.executeQuery("SELECT `login`, `pass` FROM users WHERE `login` = '" + login + "' AND `pass` " +
-                                                            "='" + pass + "' ");
-
-                                            while (resultSet.next()) {
-                                                String l = resultSet.getNString(1);
-                                                String p = resultSet.getNString(2);
-                                                if (Objects.equals(login, l) && Objects.equals(pass, p)) {
-                                                    isTruePasswordAndLogin = true;
-                                                    jsonObject.put("msg", "Добро пожаловать на сервер!");
-                                                } else {
-                                                    jsonObject.put("msg", "Вы ввели не правильные данные");
-                                                }
-                                                user.getOut().writeUTF(jsonObject.toJSONString());
-                                                jsonObject = (JSONObject) jsonParser.parse(user.getIn().readUTF());
-                                            }
-                                        }
-                                    }
-
-
-                                    statement.close();
-                                    break;
+                                    if (user.login(db_url, db_login, db_pass)) break;
                                 }
                             }
-
-                            jsonObject.put("msg", "Введите имя: ");
-                            user.getOut().writeUTF(jsonObject.toJSONString());
-
-
-                            String name = jsonObject.get("msg").toString();
-                            boolean uniqueName = false;
-                            while (!uniqueName) { // до тех пор пока имя не уникальное
-                                uniqueName = true; // наверное имя уникально
-                                for (User user1 : users) { // но мы проверим
-                                    if (name.equals(user1.getName())) { // если нашли такое же имя, то
-                                        user.getOut().writeUTF("Имя занято, выберите другое");
-                                        jsonObject = (JSONObject) jsonParser.parse(user.getIn().readUTF());
-                                        name = jsonObject.get("msg").toString();
-                                        uniqueName = false; // имя было не уникально, нужно проверить ещё раз
-                                        break;
-                                    }
-                                }
-                            }
-
-                            user.setName(name);
+                            users.add(user);
                             sendUserList(users);
                             jsonObject.put("msg", user.getName() + " добро пожаловать на сервер!");
                             user.getOut().writeUTF(jsonObject.toJSONString());
+                            ArrayList<Message> messages = Message.readPublicMessages(db_url, db_login, db_pass);
+
+
+                            for (Message message : messages) {
+                                jsonObject.put("msg", message.getMsg());
+                                user.getOut().writeUTF(jsonObject.toJSONString());
+                            }
+
+
+
                             String clientMessage;
                             while (true) {
                                 jsonObject = (JSONObject) jsonParser.parse(user.getIn().readUTF());
                                 clientMessage = jsonObject.get("msg").toString();
                                 System.out.println(clientMessage);
-                                if ((boolean) jsonObject.get("public"))
+                                if ((boolean) jsonObject.get("public")) {
+                                    Message message = new Message(clientMessage, user.getId(), 0);
+                                    message.saveMessage(db_url, db_login, db_pass);
                                     for (User user1 : users) {
-                                        if (name.equals(user1.getName())) continue;
+                                        if (user.getName().equals(user1.getName())) continue;
                                         jsonObject.remove("msg");
                                         jsonObject.put("msg", user.getName() + ": " + clientMessage);
-                                        jsonObject.put("user", user.getName());
                                         user1.getOut().writeUTF(jsonObject.toJSONString());
                                     }
-                                else {
+                                } else if (!((boolean) jsonObject.get("public"))) {
+                                    int toPrivateUser = Integer.parseInt(jsonObject.get("id").toString());
+                                    Message privateMsg = new Message("", user.getId(), toPrivateUser);
+                                    ArrayList<Message> privateMessages = privateMsg.readAllPrivateMessages(db_url, db_login, db_pass);
+
+                                    for (Message privateMessage : privateMessages) {
+                                        jsonObject.put("privatemsg", privateMessage.getMsg());
+                                        user.getOut().writeUTF(jsonObject.toJSONString());
+                                    }
+                                } else {
                                     // Получаем имя получателя
-                                    String toName = jsonObject.get("name").toString();
+                                    int toUser = Integer.parseInt(jsonObject.get("id").toString());
+                                    Message message = new Message(clientMessage, user.getId(), toUser);
+                                    message.saveMessage(db_url, db_login, db_pass);
                                     for (User user1 : users) { // Перебираем всех, чтобы найти нужного
-                                        if (user1.getName().equals(toName)) {
-                                            user1.getOut().writeUTF(user.getName() + ": " + clientMessage);
+                                        if (user1.getId() == toUser) {
+                                            jsonObject.put("msg", user.getName() + ": " + clientMessage);
+                                            user1.getOut().writeUTF(jsonObject.toJSONString());
                                             break;
                                         }
                                     }
                                 }
                             }
-                        } catch (Exception e) {
+                        } catch (IOException e) {
                             System.out.println("Клиент отключился");
                             users.remove(user);
                             sendUserList(users);
+                        } catch (SQLException | ParseException e) {
+                            e.printStackTrace();
                         }
                     }
                 });
@@ -169,8 +122,10 @@ public class Server {
         JSONObject jsonObject = new JSONObject();
         JSONArray jsonArray = new JSONArray();
         users.forEach(user -> {
-            String username = user.getName();
-            jsonArray.add(username);
+            JSONObject jsonUserObject = new JSONObject();
+            jsonUserObject.put("name", user.getName());
+            jsonUserObject.put("id", user.getId());
+            jsonArray.add(jsonUserObject);
         });
         jsonObject.put("onlineUsers", jsonArray);
         users.forEach(user -> {
